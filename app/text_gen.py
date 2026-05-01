@@ -1,4 +1,4 @@
-"""Генерация текста поста и анализ планировки через Claude Sonnet 4.6."""
+"""Генерация текста поста и анализ планировки через Polza.ai (OpenAI-compatible)."""
 
 from __future__ import annotations
 
@@ -7,9 +7,10 @@ import json
 import os
 from typing import Any
 
-from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 
-MODEL = "claude-sonnet-4-6"
+POLZA_BASE_URL = "https://polza.ai/api/v1"
+MODEL = "anthropic/claude-sonnet-4.6"
 
 SYSTEM_PROMPT = """Ты — SMM-копирайтер агентства недвижимости Морейн. Морейн помогает клиентам выбирать и покупать курортную недвижимость в России (Сочи, Анапа, Крым, Алтай, Калининград, Горы).
 
@@ -47,13 +48,9 @@ SYSTEM_PROMPT = """Ты — SMM-копирайтер агентства недв
 Количество комнат в rooms должно совпадать с запрошенным n_images."""
 
 
-def _client() -> AsyncAnthropic:
-    api_key = os.environ["ANTHROPIC_API_KEY"]
-    return AsyncAnthropic(api_key=api_key)
-
-
-def _image_to_base64(image_bytes: bytes) -> str:
-    return base64.standard_b64encode(image_bytes).decode("utf-8")
+def _client() -> AsyncOpenAI:
+    api_key = os.environ["POLZA_API_KEY"]
+    return AsyncOpenAI(api_key=api_key, base_url=POLZA_BASE_URL)
 
 
 def _detect_media_type(image_bytes: bytes) -> str:
@@ -66,6 +63,21 @@ def _detect_media_type(image_bytes: bytes) -> str:
     if image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
         return "image/webp"
     return "image/png"
+
+
+def _image_data_url(image_bytes: bytes) -> str:
+    media_type = _detect_media_type(image_bytes)
+    b64 = base64.standard_b64encode(image_bytes).decode("ascii")
+    return f"data:{media_type};base64,{b64}"
+
+
+def _strip_json_wrapper(raw: str) -> str:
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.strip("`").lstrip("\n")
+        if raw.lower().startswith("json"):
+            raw = raw[4:].lstrip("\n")
+    return raw
 
 
 async def generate_post_and_analyze(
@@ -87,43 +99,27 @@ async def generate_post_and_analyze(
 
 Верни СТРОГО JSON, без markdown-обёртки."""
 
-    media_type = _detect_media_type(floorplan_bytes)
-    image_b64 = _image_to_base64(floorplan_bytes)
-
     client = _client()
-    resp = await client.messages.create(
+    resp = await client.chat.completions.create(
         model=MODEL,
         max_tokens=2048,
-        system=[
-            {
-                "type": "text",
-                "text": SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
+        temperature=0.7,
         messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": image_b64,
-                        },
-                    },
                     {"type": "text", "text": user_text},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": _image_data_url(floorplan_bytes)},
+                    },
                 ],
-            }
+            },
         ],
     )
 
-    raw = resp.content[0].text.strip()
-    if raw.startswith("```"):
-        raw = raw.strip("`")
-        if raw.startswith("json\n"):
-            raw = raw[5:]
+    raw = _strip_json_wrapper(resp.choices[0].message.content or "")
     parsed = json.loads(raw)
 
     rooms = parsed.get("rooms") or []
@@ -143,36 +139,22 @@ async def generate_post_and_analyze(
 async def regenerate_text_only(topic: str, prior_rooms_ru: list[str]) -> str:
     """Перегенерация только текста без новой обработки планировки."""
     client = _client()
-    resp = await client.messages.create(
+    resp = await client.chat.completions.create(
         model=MODEL,
         max_tokens=1024,
-        system=[
-            {
-                "type": "text",
-                "text": SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
+        temperature=0.85,
         messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            f"Тема: {topic}\n"
-                            f"В планировке выделены комнаты: {', '.join(prior_rooms_ru)}\n\n"
-                            "Напиши новый вариант поста по правилам. "
-                            'Верни JSON: {"post_text": "..."}'
-                        ),
-                    }
-                ],
-            }
+                "content": (
+                    f"Тема: {topic}\n"
+                    f"В планировке выделены комнаты: {', '.join(prior_rooms_ru)}\n\n"
+                    "Напиши новый вариант поста по правилам. "
+                    'Верни JSON: {"post_text": "..."}'
+                ),
+            },
         ],
     )
-    raw = resp.content[0].text.strip()
-    if raw.startswith("```"):
-        raw = raw.strip("`")
-        if raw.startswith("json\n"):
-            raw = raw[5:]
+    raw = _strip_json_wrapper(resp.choices[0].message.content or "")
     return json.loads(raw)["post_text"].strip()

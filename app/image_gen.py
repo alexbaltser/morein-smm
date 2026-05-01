@@ -1,10 +1,15 @@
-"""Генерация интерьерных рендеров через OpenAI gpt-image-1."""
+"""Генерация интерьерных рендеров через Polza.ai (OpenAI-compatible images endpoint).
+
+Стратегия v1: используем `images.generate` с Gemini 3 Pro Image. Детали планировки
+(площадь, окна, форма комнаты, евро/изолированная) уже извлечены текстовой моделью
+на предыдущем шаге и приходят в `hint`. Это даёт верный по духу рендер без зависимости
+от поддержки image-to-image edit-эндпойнтов на стороне агрегатора.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import base64
-import io
 import os
 from pathlib import Path
 
@@ -12,9 +17,9 @@ from openai import AsyncOpenAI
 
 from .style_presets import StylePreset
 
-MODEL = "gpt-image-1"
+POLZA_BASE_URL = "https://polza.ai/api/v1"
+MODEL = "google/gemini-3-pro-image-preview"
 SIZE = "1536x1024"
-QUALITY = "high"
 
 ROOM_PROMPTS_RU = {
     "living_room": "просторной гостиной",
@@ -46,34 +51,35 @@ ROOM_PROMPTS_EN = {
     "dining_room": "the dining area",
     "master_bedroom": "the master bedroom with ensuite",
     "full_apartment_overview": (
-        "an isometric cutaway overview of the entire apartment, "
-        "showing all rooms furnished, in the same orientation as the floor plan"
+        "an isometric cutaway overview of an entire apartment, "
+        "showing all rooms furnished, top-down 3/4 angle"
     ),
 }
 
 
 def _client() -> AsyncOpenAI:
-    return AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    return AsyncOpenAI(
+        api_key=os.environ["POLZA_API_KEY"],
+        base_url=POLZA_BASE_URL,
+    )
 
 
 def _build_prompt(room_key: str, hint: str, preset: StylePreset) -> str:
     room_en = ROOM_PROMPTS_EN.get(room_key, "the room")
     return (
-        f"Photorealistic interior render of {room_en}, faithful to the attached floor plan "
-        f"(same proportions, window placement, and door positions). "
-        f"Specific details from the plan: {hint or 'follow the floor plan precisely'}. "
+        f"Photorealistic interior render of {room_en}. "
+        f"Architectural details from the apartment floor plan: {hint or 'follow standard residential proportions'}. "
         f"Style: {preset.prompt_fragment}. "
         f"Lighting: {preset.lighting}. "
         f"Mood: {preset.mood}. "
         f"Colour palette: {preset.palette}. "
         f"Camera: eye-level wide-angle 24mm, full-frame, sharp throughout. "
-        f"Furnish the room appropriately for a high-end residential listing. "
-        f"No text, no logos, no watermarks, no people."
+        f"Furnish the room appropriately for a high-end residential listing in a Russian coastal resort city. "
+        f"No text, no logos, no watermarks, no people, no signage in any language."
     )
 
 
 async def _render_one(
-    floorplan_bytes: bytes,
     room_key: str,
     hint: str,
     preset: StylePreset,
@@ -82,22 +88,31 @@ async def _render_one(
     client = _client()
     prompt = _build_prompt(room_key, hint, preset)
 
-    resp = await client.images.edit(
+    resp = await client.images.generate(
         model=MODEL,
-        image=("floorplan.png", io.BytesIO(floorplan_bytes), "image/png"),
         prompt=prompt,
         size=SIZE,
-        quality=QUALITY,
         n=1,
     )
 
-    b64 = resp.data[0].b64_json
-    out_path.write_bytes(base64.b64decode(b64))
+    item = resp.data[0]
+    if getattr(item, "b64_json", None):
+        out_path.write_bytes(base64.b64decode(item.b64_json))
+    elif getattr(item, "url", None):
+        # Fallback: скачать по URL
+        import httpx
+        async with httpx.AsyncClient(timeout=60) as http:
+            r = await http.get(item.url)
+            r.raise_for_status()
+            out_path.write_bytes(r.content)
+    else:
+        raise RuntimeError(f"image response had neither b64_json nor url: {item}")
+
     return out_path
 
 
 async def render_rooms(
-    floorplan_bytes: bytes,
+    floorplan_bytes: bytes,  # сохраняем сигнатуру для совместимости с main.py
     rooms: list[str],
     hints: list[str],
     preset: StylePreset,
@@ -108,7 +123,7 @@ async def render_rooms(
     tasks = []
     for idx, (room, hint) in enumerate(zip(rooms, hints), start=1):
         out_path = job_dir / f"img_{idx}_{room}.png"
-        tasks.append(_render_one(floorplan_bytes, room, hint, preset, out_path))
+        tasks.append(_render_one(room, hint, preset, out_path))
     return await asyncio.gather(*tasks)
 
 
@@ -119,6 +134,6 @@ async def render_one_image(
     preset: StylePreset,
     out_path: Path,
 ) -> Path:
-    """Перегенерация одной картинки (для regenerate-image эндпоинта)."""
+    """Перегенерация одной картинки."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    return await _render_one(floorplan_bytes, room_key, hint, preset, out_path)
+    return await _render_one(room_key, hint, preset, out_path)

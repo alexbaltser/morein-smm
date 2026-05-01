@@ -8,8 +8,10 @@
 ## Стек
 
 - FastAPI + uvicorn
-- Anthropic SDK (Claude Sonnet 4.6 с prompt caching) — генерация текста и vision-анализ планировки
-- OpenAI SDK (gpt-image-1) — `images.edit`, передаём планировку как input
+- Polza.ai (OpenAI-совместимый API) — единая точка для текста и картинок:
+  - текст и vision-анализ планировки: `anthropic/claude-sonnet-4.6` через `chat/completions`
+  - интерьерные рендеры: `google/gemini-3-pro-image-preview` через `images/generations`
+- OpenAI SDK с `base_url=https://polza.ai/api/v1` (один SDK для обоих)
 - Vanilla JS на фронте, без сборки
 
 ## Архитектура
@@ -34,7 +36,7 @@ data/jobs/<job_id>/
 ```bash
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env  # вписать ANTHROPIC_API_KEY, OPENAI_API_KEY
+cp .env.example .env  # вписать POLZA_API_KEY (pza_...)
 uvicorn app.main:app --host 0.0.0.0 --port 8011 --env-file .env
 ```
 
@@ -62,7 +64,7 @@ git clone git@github.com:alexbaltser/morein-smm.git /opt/morein-smm
 cd /opt/morein-smm
 python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-nano .env  # ANTHROPIC_API_KEY, OPENAI_API_KEY
+nano .env  # POLZA_API_KEY=pza_...
 add-service morein-smm /opt/morein-smm "venv/bin/uvicorn app.main:app --host 0.0.0.0 --port \$PORT --env-file /opt/morein-smm/.env"
 ```
 
@@ -79,11 +81,12 @@ Nginx — добавить location `/smm/` с HTTP Basic Auth (`/etc/nginx/.htp
 | `POST` | `/api/regenerate-text/{id}` | новый вариант текста |
 | `POST` | `/api/regenerate-image/{id}/{idx}` | перерендерить картинку (опц. `extra_prompt` form-field) |
 
-## Стоимость генерации (ориентировочно)
+## Стоимость генерации
 
-- Текст (Claude Sonnet 4.6 с vision на планировку): ~$0.02–0.05
-- Картинка (gpt-image-1, 1536×1024 high): ~$0.17 за штуку
-- Один пост с 3 рендерами: ~$0.55
+Через Polza.ai в рублях. Точные тарифы — в `/api/v1/models`. Ориентир:
+- Текст (claude-sonnet-4.6 с vision): ~5–10 ₽ за пост
+- Картинка (gemini-3-pro-image-preview, 1536×1024): ~15–30 ₽ за штуку
+- Один пост с 3 рендерами: ~50–100 ₽
 
 ## Заметки
 
