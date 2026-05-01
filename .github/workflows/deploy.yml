@@ -1,0 +1,27 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: root
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/morein-smm
+            git pull origin main
+            source venv/bin/activate
+            pip install -r requirements.txt --quiet
+            systemctl restart morein-smm
+            sleep 5
+            systemctl is-active morein-smm
+            curl -sf --max-time 10 http://localhost:$(grep -oP 'Environment=PORT=\K\d+' /etc/systemd/system/morein-smm.service)/health

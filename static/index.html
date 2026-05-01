@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Морейн SMM — генератор постов</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <h1>Морейн SMM</h1>
+  <p class="sub">Тема + планировка → пост и интерьерные рендеры</p>
+</header>
+
+<main>
+  <section class="card form-card">
+    <form id="gen-form">
+      <label>
+        <span>Тема поста</span>
+        <textarea id="topic" name="topic" rows="4" required
+          placeholder="Современная студия 35 м² у моря в Анапе. Готовая под аренду, евро-формат, балкон с видом на парк."></textarea>
+      </label>
+
+      <label>
+        <span>Планировка</span>
+        <div id="drop" class="drop">
+          <input id="floorplan" type="file" accept="image/png,image/jpeg,image/webp" required hidden>
+          <div class="drop-hint">Перетащи изображение планировки сюда или нажми, чтобы выбрать</div>
+          <img id="preview" hidden>
+        </div>
+      </label>
+
+      <div class="row">
+        <label class="grow">
+          <span>Стиль</span>
+          <select id="style" name="style"></select>
+        </label>
+        <label>
+          <span>Картинок</span>
+          <select id="n_images" name="n_images">
+            <option>1</option><option>2</option><option selected>3</option><option>4</option>
+          </select>
+        </label>
+      </div>
+
+      <button id="submit" type="submit">Сгенерировать</button>
+    </form>
+  </section>
+
+  <section id="status" class="card status" hidden></section>
+
+  <section id="result" class="card result" hidden>
+    <h2>Текст поста</h2>
+    <textarea id="post-text" rows="14"></textarea>
+    <div class="actions">
+      <button id="copy">Скопировать текст</button>
+      <button id="regen-text" class="secondary">Перегенерировать текст</button>
+    </div>
+
+    <h2>Картинки</h2>
+    <div id="images" class="images"></div>
+  </section>
+
+  <section id="history-section" class="card history" hidden>
+    <h2>История последних генераций</h2>
+    <ul id="history"></ul>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
