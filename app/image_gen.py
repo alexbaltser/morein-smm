@@ -4,6 +4,11 @@
 (площадь, окна, форма комнаты, евро/изолированная) уже извлечены текстовой моделью
 на предыдущем шаге и приходят в `hint`. Это даёт верный по духу рендер без зависимости
 от поддержки image-to-image edit-эндпойнтов на стороне агрегатора.
+
+Polza отдаёт генерацию асинхронно: `images.generate` возвращает только `requestId`
+(`resp.data` = None), результат забираем поллингом `GET /images/{requestId}` до
+`status=COMPLETED` — там ссылка на готовый JPEG. Параметр `size` агрегатор сейчас
+игнорирует и возвращает 1024×1024.
 """
 
 from __future__ import annotations
@@ -11,8 +16,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import os
+import time
 from pathlib import Path
 
+import httpx
 from openai import AsyncOpenAI
 
 from .style_presets import StylePreset
@@ -20,6 +27,8 @@ from .style_presets import StylePreset
 POLZA_BASE_URL = "https://polza.ai/api/v1"
 MODEL = "google/gemini-3-pro-image-preview"
 SIZE = "1536x1024"
+POLL_INTERVAL_S = 5
+POLL_TIMEOUT_S = 300
 
 ROOM_PROMPTS_RU = {
     "living_room": "просторной гостиной",
@@ -79,6 +88,27 @@ def _build_prompt(room_key: str, hint: str, preset: StylePreset) -> str:
     )
 
 
+async def _poll_result_url(request_id: str) -> str:
+    """Поллит GET /images/{requestId}, пока Polza не отдаст ссылку на готовую картинку."""
+    headers = {"Authorization": f"Bearer {os.environ['POLZA_API_KEY']}"}
+    deadline = time.monotonic() + POLL_TIMEOUT_S
+    async with httpx.AsyncClient(timeout=60, headers=headers) as http:
+        while time.monotonic() < deadline:
+            await asyncio.sleep(POLL_INTERVAL_S)
+            r = await http.get(f"{POLZA_BASE_URL}/images/{request_id}")
+            r.raise_for_status()
+            data = r.json()
+            status = (data.get("status") or "").upper()
+            if status == "COMPLETED":
+                url = data.get("url") or (data.get("images") or [None])[0]
+                if not url:
+                    raise RuntimeError(f"generation {request_id} completed without url: {data}")
+                return url
+            if status in ("FAILED", "ERROR", "CANCELLED"):
+                raise RuntimeError(f"generation {request_id} ended with {status}: {data}")
+    raise TimeoutError(f"generation {request_id} not completed in {POLL_TIMEOUT_S}s")
+
+
 async def _render_one(
     room_key: str,
     hint: str,
@@ -95,18 +125,25 @@ async def _render_one(
         n=1,
     )
 
-    item = resp.data[0]
-    if getattr(item, "b64_json", None):
-        out_path.write_bytes(base64.b64decode(item.b64_json))
-    elif getattr(item, "url", None):
-        # Fallback: скачать по URL
-        import httpx
-        async with httpx.AsyncClient(timeout=60) as http:
-            r = await http.get(item.url)
-            r.raise_for_status()
-            out_path.write_bytes(r.content)
-    else:
-        raise RuntimeError(f"image response had neither b64_json nor url: {item}")
+    url: str | None = None
+    if resp.data:
+        # Синхронный ответ (старый формат) — вдруг Polza вернёт его снова
+        item = resp.data[0]
+        if getattr(item, "b64_json", None):
+            out_path.write_bytes(base64.b64decode(item.b64_json))
+            return out_path
+        url = getattr(item, "url", None)
+
+    if not url:
+        request_id = getattr(resp, "requestId", None) or (resp.model_extra or {}).get("requestId")
+        if not request_id:
+            raise RuntimeError(f"image response had neither data nor requestId: {resp}")
+        url = await _poll_result_url(request_id)
+
+    async with httpx.AsyncClient(timeout=120) as http:
+        r = await http.get(url)
+        r.raise_for_status()
+        out_path.write_bytes(r.content)
 
     return out_path
 

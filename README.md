@@ -90,6 +90,7 @@ Nginx — добавить location `/smm/` с HTTP Basic Auth (`/etc/nginx/.htp
 
 ## Заметки
 
+- Polza отдаёт картинки асинхронно (с июля 2026): `images.generate` возвращает только `requestId`, готовый JPEG забирается поллингом `GET /images/{requestId}` до `status=COMPLETED` — реализовано в `image_gen._poll_result_url`. Параметр `size` агрегатор игнорирует, возвращает 1024×1024.
 - Tone-of-voice и жёсткие правила (без «юридики», без латиницы кроме ROI/ADR, кварталы прописью) зашиты в системный промпт `text_gen.py`. При правке стиля — там же.
 - Запрашиваемые ключи комнат и их русские названия — в `image_gen.ROOM_PROMPTS_*`.
 - `data/` в `.gitignore` — не коммитим.
